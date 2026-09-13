@@ -103,6 +103,60 @@ CLI resolution prefers an explicit `OPENBOT_*_PATH`, then the installed managed 
 automatically discovered system CLI. Updates never run the system CLI's updater. An explicit path
 suppresses managed update offers. Startup uses the same selection and reads the executable's version.
 
+Installed runtimes live in one store per computer, `appData/OpenBot/provider-runtimes`, which is the
+path the packaged app always used: its `userData` is `appData/OpenBot`. Development profiles differ
+per renderer port and per `--isolated` worktree, so a store inside `userData` started empty in each
+one, fell back to the user's own CLI, and offered and downloaded the pinned copy again. An explicit
+`--user-data-dir` still keeps its own store, so automation and packaged smoke checks stay
+self-contained. Partial downloads stay in the profile: two instances appending to one `.partial`
+would interleave their bytes.
+
+Several instances can therefore write to one store, and they do not all carry this manager: a
+released build sweeps every `.installing-` directory it finds when it starts, whatever its age and
+whoever is filling it, so this build stages under `.staging-` and keeps the older prefix only to
+collect what those builds abandon.
+
+Installing a pinned version is idempotent, so a commit that finds the destination occupied verifies
+it and adopts it instead of replacing it, and only a destination that fails verification is moved
+aside. That replacement is claimed first, with a lock directory beside the staging ones. The claim
+is built away from the path, with the name of its owner already inside it, and moved onto the path
+in one step, which the filesystem grants to one instance at a time; the path therefore never exists
+without naming an owner. That is what makes age evidence: a claim reads old only when the instance
+that made it is gone, never because a live one is part-way through making it. Whoever holds the
+claim reads the destination again, so a copy a sibling committed in the meantime is adopted and
+never moved, and reads what it moved aside once more before replacing it: neither the claim nor the
+reading before the move is a promise about the moment of the move, so a runtime that verifies goes
+back where it was found and is adopted. Nothing that verifies is ever replaced. An install that
+cannot be read back after it is committed is taken away the same way, and for the same reason: it
+is moved first, read where nothing else can reach it, and put back if it verifies, because the
+reading that rejected it can have failed only because a sibling was replacing the path as it ran. A claim as old as an abandoned stage is recovered by moving it away and reading who it
+names: the rename is atomic, so what it moved is that instance's alone to read, and only the claim
+whose name was read is the abandoned one. The name is read before the age, so the two cannot come
+from different directories: a claim on the path is only ever replaced by a newer one, so an age that
+reads old belongs to the directory the name came from, or to one it already replaced. A claim made in between belongs to an instance that recovered the
+path first, and the instance that moved it takes nothing. The holder reads the claim again
+immediately before it moves anything and releases it only while it is still the one that attempt
+made, so an instance that lost its claim stops at the destination rather than after it. The sweep
+leaves claims alone: it holds none itself, and would otherwise be one more unsynchronised writer of
+the path the claim exists to serialise.
+
+One thing the store cannot defend is an installed version, while released builds still carry the
+manager this one replaces: their collector keeps the version they pin and the highest other one, and
+deletes the rest whenever they start, reading no timestamps. A development instance running a
+version in between loses it and downloads it again. The alternative -- a store of its own, filled by
+copying every verified runtime across -- would keep a second copy of each CLI on every computer for
+as long as both managers exist, which is the cost this store was made to remove, and the exposure
+ends with the first release that carries the age rule.
+
+An update that finds the version already in the store skips the transfer, not the activation: the
+agent service has to be given the executable either way. Staging directories carry the pid and a
+random suffix and are swept by age, never by name, so a sibling's install is not collected while it
+runs. The manager stamps each version it takes into use -- the pinned one it verified, and the older
+one it falls back to until the pinned one arrives -- and collection keeps anything stamped within a
+month, so a version another instance or another
+worktree's pin still runs is not removed; a collection that fails, as it does on Windows for an open
+binary, never stops startup.
+
 ## Agent communication policy
 
 The shared developer instructions keep routine teammate exchanges internal by default. Agents
