@@ -4,7 +4,7 @@ import {
   TEAM_EML_ATTACHMENTS_CAPABILITY,
   TEAM_MEDIA_ATTACHMENTS_CAPABILITY,
 } from "@openbot/contracts/team-protocol/current";
-import { createSignal, For, Loading, lazy, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Loading, lazy, onCleanup, Show } from "solid-js";
 import {
   ArrowUp,
   Button,
@@ -22,6 +22,7 @@ import { usePlatform } from "../../platform";
 import { fileBadge, formatFileSize } from "./AttachmentCards";
 import { attachmentReferenceTone } from "./AttachmentReference";
 import { ComposerEditor } from "./ComposerEditor";
+import { ComposerSignInNotice, ComposerUsageLimitNotice } from "./ComposerNotice";
 import { CloseIcon, MoreIcon, StopIcon } from "./ConversationIcons";
 import { useConversationViewScope } from "./conversation-scope";
 import { RichMessageText } from "./RichMessageText";
@@ -73,6 +74,48 @@ export function ConversationComposer() {
   // The mention picker grows out of the same edge as the queue, so only one of them holds it.
   const queueVisible = () => queuePanelVisible() && !pickerOpen();
   const voiceAvailable = () => voiceSupported(platform.appInfo()?.platform);
+  /**
+   * The provider status is the only source of truth for a signed-out provider, so the notice and the
+   * model picker's "Sign in required" label can never disagree, and the notice is shown before the
+   * user sends rather than only after a request comes back 401.
+   */
+  const signInRequired = createMemo(() => {
+    const provider = props.agent?.provider;
+    if (!provider || !props.onSignInProvider) return null;
+    const status = props.agentStatus.providers?.find((item) => item.id === provider);
+    return status?.state === "sign-in-required" ? status : null;
+  });
+  /**
+   * A window that ended gives the quota back, and the reading that named it stays as it was until
+   * something asks the provider again. So the clock is part of the state, not only the percentage.
+   */
+  const [now, setNow] = createSignal(Date.now());
+  /**
+   * The first plan window that is spent and has not ended yet. `usedPercent` is what the provider
+   * reports, so it can pass 100 slightly; anything at or over the line refuses the next turn.
+   */
+  const usageExhausted = createMemo(() => {
+    const provider = props.agent?.provider;
+    if (!provider || signInRequired()) return null;
+    for (const limit of props.accountUsage?.limits ?? []) {
+      for (const plan of [limit.primary, limit.secondary]) {
+        if (!plan || plan.usedPercent < 100) continue;
+        if (plan.resetsAt !== null && plan.resetsAt * 1_000 <= now()) continue;
+        return { provider, resetsAt: plan.resetsAt };
+      }
+    }
+    return null;
+  });
+  // The card has to leave on its own. Nothing else reads usage again until the next turn, and the
+  // user waiting for the reset is the one least likely to send one.
+  createEffect(
+    () => usageExhausted()?.resetsAt ?? null,
+    (resetsAt) => {
+      if (resetsAt === null) return;
+      const timer = window.setTimeout(() => setNow(Date.now()), Math.max(0, resetsAt * 1_000 - Date.now()));
+      onCleanup(() => window.clearTimeout(timer));
+    },
+  );
   const attachmentAccept = () => {
     const server = props.server;
     const local = server?.kind !== "remote";
@@ -139,6 +182,18 @@ export function ConversationComposer() {
               </Button>
             </div>
           )}
+        </Show>
+        <Show when={signInRequired()}>
+          {(status) => (
+            <ComposerSignInNotice
+              provider={status().id}
+              signingIn={status().connectionState === "connecting"}
+              onSignIn={(provider) => props.onSignInProvider?.(provider)}
+            />
+          )}
+        </Show>
+        <Show when={usageExhausted()}>
+          {(spent) => <ComposerUsageLimitNotice provider={spent().provider} resetsAt={spent().resetsAt} />}
         </Show>
         <Show when={composerError() ?? currentConversationError()}>
           <div class="composer-error" role="alert">

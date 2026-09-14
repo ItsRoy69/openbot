@@ -1,8 +1,10 @@
 import type { AgentEvent, AgentRuntimeSnapshot } from "@openbot/contracts/ipc";
+import { classifyUserError } from "@openbot/user-errors";
 import { flush, onSettled } from "solid-js";
 import { withoutAgent } from "../../app-message-projection";
 import { playCompletionSoundForAgentEvent } from "../../completion-sound";
 import { toast } from "../../components/ui";
+import { errorMessage } from "../../error-message";
 import { usePlatform } from "../../platform";
 import { useProviders } from "../../providers";
 import { queueAfterTurnCompleted } from "../../queue-reconciliation";
@@ -24,8 +26,9 @@ import { useAgents } from "./agents-context";
 const ERROR_TOAST_DESCRIPTION_LIMIT = 300;
 
 function errorToastDescription(message: string): string {
-  if (message.length <= ERROR_TOAST_DESCRIPTION_LIMIT) return message;
-  return `${message.slice(0, ERROR_TOAST_DESCRIPTION_LIMIT - 1).trimEnd()}…`;
+  const readable = errorMessage(message, "The agent could not continue. Try again.");
+  if (readable.length <= ERROR_TOAST_DESCRIPTION_LIMIT) return readable;
+  return `${readable.slice(0, ERROR_TOAST_DESCRIPTION_LIMIT - 1).trimEnd()}…`;
 }
 
 /**
@@ -50,7 +53,7 @@ export function AgentEventBridge() {
   const platform = usePlatform();
   const { activeServerId } = useServers();
   const { invalidateAccountUsage } = useAuth();
-  const { applyAgentStatus } = useProviders();
+  const { applyAgentStatus, refreshAgentProviders } = useProviders();
   const { agentList, setModelOptions, explicitlyOpenedAgentChatId, applyStoredAgents, appendUiError } = useAgents();
   const {
     applyRuntimeMessages,
@@ -95,6 +98,10 @@ export function AgentEventBridge() {
         }
         return;
       case "usage-changed":
+        // The payload is dropped on purpose. A broadcast read carries no model scope and comes from
+        // the Codex client whatever agent is active, so it cannot say whose limit it is. The dock's
+        // own reading is scoped to the active agent's provider and model, so it is the only one the
+        // composer can name a provider from.
         invalidateAccountUsage();
         return;
       case "agents-changed":
@@ -255,7 +262,18 @@ export function AgentEventBridge() {
         });
         return;
       case "error": {
-        if (event.agentId) appendUiError(event.agentId, event.message, "Error", activeServerId());
+        // A provider reports an expired account as a 401 quoted inside the whole HTTP exchange, so
+        // the kind has to be read from the text. Naming it here gives the bubble a label the user
+        // can act on, and the refresh flips the provider to `sign-in-required`, which is what puts
+        // the Sign in notice above the composer. Nothing else knows the account has lapsed until
+        // the next probe, so without the refresh the user would have to reopen settings to find out.
+        const authFailure = classifyUserError(event.message) === "auth";
+        // A failed refresh is not reported: the error the user already has is the report, and a
+        // second toast for the probe that went looking for its cause only buries the first.
+        if (authFailure) void refreshAgentProviders().catch(() => undefined);
+        if (event.agentId) {
+          appendUiError(event.agentId, event.message, authFailure ? "Sign in required" : "Error", activeServerId());
+        }
         // The inline feed is keyed by agent and by server, so it reaches nobody when the error
         // carries no agent - a provider that fails to start is the common case - and it is unread
         // until the user opens that chat. The message is already redacted in the main process.
