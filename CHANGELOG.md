@@ -5,12 +5,65 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-14
+
+### Added
+
+- Run OpenBot on Linux x64. The release publishes an AppImage, the one Linux format that updates
+  itself in place, and the in-app provider download covers Codex, Claude, Grok, and OpenCode there.
+  Voice prompts and remote desktop are absent on Linux and report themselves as unavailable, and the
+  AppImage is unsigned, as the Windows installer is. `docs/TROUBLESHOOTING.md` covers the AppArmor
+  profile that Ubuntu 23.10 and later need.
+- Give an agent skills. Write a skill locally, install one from the marketplace, and enable,
+  disable, or remove it for each agent. Type `$` in the composer to insert a skill, and read a
+  shared chat's skill actions in its preview. `@` still means agents and files.
+- Choose the language of the application. Settings offers System, English, and Japanese, the menu
+  and agent notifications follow the choice at once, and no restart is needed. A key that is not
+  translated yet reads English rather than disappearing. The Japanese catalog is a first draft.
+- Preview audio, video, SVG, and email files in the file panel and the attachment lightbox. Audio
+  and video keep `previewKind: "none"` on the wire, so no released Team API adapter changes meaning.
+- Read `/news` and `/guides` on openbot.run: article pages, an RSS feed, a sitemap, and structured
+  data, with article artwork drawn from the title.
+- Say what OpenBot costs on the landing page.
+
 ### Changed
 
 - Start a new agent on low reasoning effort. Codex CLI reports `medium` for every GPT-5.6 model,
   which buys little on GPT-5.6 Luna, the model a new agent starts on, and costs a wait on every
   turn. An agent whose effort you already set is not moved, and every effort stays available in the
   picker.
+- Rework the composer mention and skill picker. It hangs off the input, wears the queue panel's
+  colors, names the type of each option and the source of each skill, and travels to its new height
+  as the query narrows. The queue panel gives up that space while the picker is open.
+- Drag the agent sidebar down to 128px before it snaps to the avatar rail. A width you already set
+  stays inside the new range.
+- Keep one provider CLI store for each computer, under `provider-runtimes` beside the application
+  data. The packaged application already used that path, so nothing moves for an installed user.
+  Several OpenBot instances can now install a provider at the same time without taking a running
+  CLI away from each other. Development profiles no longer offer the same update after every
+  restart.
+- Move switches and camera panels with their own motion, and animate an article background
+  continuously.
+- **openbot.run now reports the five UTM tags on a campaign link** (`utm_source`, `utm_medium`,
+  `utm_campaign`, `utm_content`, `utm_term`), which the previous privacy note said were never
+  transmitted. Every other query parameter and the hash are still dropped, so an invitation token
+  cannot reach analytics. This is the public website only: the desktop application is unchanged, and
+  chats, files, and commands are never sent. `PRIVACY.md` and `ANALYTICS.md` describe what an event
+  carries.
+
+### Fixed
+
+- Stop Grok's telemetry export failure from showing as a provider error. A computer that cannot
+  reach an OpenTelemetry collector raised a "Provider error" toast on every switch to Grok. The CLI
+  colour codes it printed as text are gone too, and a colour sequence can no longer hide a secret
+  from the redactor.
+- State a signed-out or spent provider above the composer. A lapsed account answered with its whole
+  HTTP exchange, and the account menu printed the URL, the headers, and the 401 body. The composer
+  now offers Sign in before you send, or names the reset time on a spent plan window.
+- Keep undo working for composer typing, and stop a character being written twice.
+- Play an attached recording. The packaged application blocked audio and video playback, and an
+  attached `.eml` file could not be previewed at all.
+- Retry the QR scanner after the camera fails to start.
 
 ## [0.8.0] - 2026-09-11
 
