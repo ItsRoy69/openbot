@@ -49,7 +49,10 @@ try {
     });
     try {
       const persistenceOrigin = await listen(persistenceServer);
-      for (const phase of ["write", "read", "clear", "verify-cleared"]) {
+      // Three Electron boots prove cross-process persistence both ways: write
+      // in one process and read in the next, then clear and verify-cleared in
+      // a last process. Four boots cost one extra start on macOS for no cover.
+      for (const phase of ["write", "read-clear", "verify-cleared"]) {
         const phaseExitCode = await run(
           electron,
           [
