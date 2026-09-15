@@ -27,6 +27,12 @@ export interface DrainHooks {
    * keeps a delivery off an endpoint the user has taken out.
    */
   servesModel(model: string): boolean;
+  /**
+   * One piece of provider text with the MCP credentials taken out of it. The queue keeps a failed
+   * delivery's reason in the database and shows it again, and `MailboxStore` can only apply the
+   * generic redaction: it does not know which values this machine's MCP servers were given.
+   */
+  redactMcp(text: string): string;
 }
 
 export interface DrainSchedulerOptions {
@@ -196,6 +202,11 @@ export class DrainScheduler {
     let confirmedTurnId: string | null = null;
     const claimed = this.#deliveryProviders(delivery.recipientAgentId);
     for (const provider of claimed) this.#startingDeliveries.set(provider, this.#starting(provider) + 1);
+    // Held from the refresh below until this start ends, because everything between them awaits the
+    // provider: the session is resumed or started, and then the turn is sent on it. A refresh that
+    // lands in that wait closes the session and drops the routing to it, and the turn that arrives
+    // afterwards runs where no completion can be delivered, holding the queue of this agent.
+    let releaseRuntimeRefresh: () => void = () => {};
     try {
       await this.#mailbox.markStarting(delivery.id);
       this.#mailboxSync.emitQueue(delivery.recipientAgentId);
@@ -209,7 +220,8 @@ export class DrainScheduler {
         if (!this.#hooks.servesModel(agent.model)) throw new Error(REMOVED_ENDPOINT_MESSAGE);
       };
       requireServedModel();
-      this.#threads.applyPendingRuntimeRefresh(agent);
+      this.#threads.applyPendingRuntimeRefresh(agent, delivery.id);
+      releaseRuntimeRefresh = this.#threads.holdRuntimeRefresh(agent.id);
       await this.#providers.ensureProvider(providerForAgent(agent));
       const client = this.#providers.requireReadyClient(providerForAgent(agent));
       const execution = this.#channels ? await this.#channels.prepare(context) : null;
@@ -400,12 +412,17 @@ export class DrainScheduler {
         );
         return;
       }
-      await this.#mailbox.markTerminal(delivery.id, "failed", error instanceof Error ? error.message : String(error));
+      await this.#mailbox.markTerminal(
+        delivery.id,
+        "failed",
+        this.#hooks.redactMcp(error instanceof Error ? error.message : String(error)),
+      );
       this.#mailboxSync.emitQueue(delivery.recipientAgentId);
       this.#channels?.deliveryFailed(delivery.id, "The provider could not start this assignment. Resume to try again.");
       this.#hooks.emitError("delivery_start_failed", error, delivery.recipientAgentId);
       this.scheduleDrain(delivery.recipientAgentId);
     } finally {
+      releaseRuntimeRefresh();
       for (const provider of claimed) this.#startingDeliveries.set(provider, this.#starting(provider) - 1);
     }
   }
