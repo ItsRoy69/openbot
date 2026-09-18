@@ -7,12 +7,13 @@ import type {
   MarketplaceAgentDetail,
   MarketplaceAgentSummary,
   MarketplaceSkillDetail,
+  MarketplaceSkillQuery,
   MarketplaceSkillSummary,
   SkillCategory,
   SkillPackagePreview,
   SkillSubmission,
 } from "@openbot/contracts/ipc";
-import { isSkillCategory, SKILL_CATEGORIES } from "@openbot/contracts/ipc";
+import { isSkillCategory, mcpConfigErrors, SKILL_CATEGORIES } from "@openbot/contracts/ipc";
 import { createEffect, createMemo, createSignal, createStore, For, onSettled, Show, snapshot } from "solid-js";
 import { desktopAnalytics } from "../../analytics";
 import { normalizeAvatarFile } from "../../avatar-image";
@@ -34,11 +35,6 @@ import {
   Puzzle,
   RefreshCw,
   Search,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Skeleton,
   SlidingTabs,
   Upload,
@@ -46,9 +42,14 @@ import {
 } from "../../components/ui";
 import { errorMessage } from "../../error-message";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { safeBrowserUrl } from "../conversation/RichMessageText";
 import { routineScheduleSummary } from "../conversation/routine-schedule-ui";
+import { AgentSelect } from "./AgentSelect";
 import { CATEGORY_LABELS, MarketplaceCatalog } from "./MarketplaceCatalog";
 import { MarketplaceDetail } from "./MarketplaceDetail";
+import { MarketplacePluginDetail, PluginIcon } from "./MarketplacePluginDetail";
+import { createPluginAppConfig } from "./marketplace-plugin-catalog";
+import type { MarketplacePluginPrompt, MarketplacePluginDetail as PluginDetail } from "./marketplace-plugins";
 
 interface SkillsMarketplaceModalProps {
   open: boolean;
@@ -57,6 +58,25 @@ interface SkillsMarketplaceModalProps {
   onOpenChange: (open: boolean) => void;
   onTrySkill?: (agentId: string, skill: MarketplaceSkillDetail) => void;
   onAgentInstalled?: (agent: AgentSummary) => void | Promise<void>;
+  /**
+   * The plugin listings the Plugins tab browses, while no endpoint answers for them. Left out, the
+   * tab keeps saying that plugins are not served yet, so nothing about the shipped app changes
+   * until there is a marketplace behind this.
+   */
+  plugins?: PluginDetail[];
+  /**
+   * The server a plugin's app installs on. A plugin's app is an MCP server, which is held by the
+   * host rather than by one agent, so the install needs the host and not the target agent. Left
+   * out - a remote server, or no server yet - the page says where the install can happen instead
+   * of failing at the save.
+   */
+  pluginServerId?: string;
+  /**
+   * Puts a listing's example question in the chosen agent's composer, as `onTrySkill` does for a
+   * skill example. Left out - a busy agent, a remote server - the arrows are off, and the examples
+   * are a showcase rather than a control that does nothing.
+   */
+  onRunPluginPrompt?: (agentId: string, prompt: MarketplacePluginPrompt) => void;
 }
 
 type Tab = "discover" | "mine";
@@ -65,6 +85,9 @@ type MarketplaceKind = "agents" | "plugins" | "skills";
 function isMarketplaceKind(value: string): value is MarketplaceKind {
   return value === "agents" || value === "plugins" || value === "skills";
 }
+
+/** What the search field says it searches, since "agents" is not the word inside the sentence. */
+const SEARCH_SUBJECT: Record<MarketplaceKind, string> = { agents: "agent", plugins: "plugin", skills: "skill" };
 
 /**
  * What the detail layer shows. Three signals allowed a combination the product does not have - a
@@ -147,6 +170,117 @@ export function SkillsMarketplaceModal(props: SkillsMarketplaceModalProps) {
   let detailTrigger: HTMLElement | null = null;
   let detailRequest = 0;
 
+  /**
+   * The plugin rows the catalog shows. The card's line is the tagline, not the paragraph the page
+   * opens with, so the row carries the listing it came from rather than being read as one.
+   */
+  function listPlugins(query: MarketplaceSkillQuery) {
+    const text = query.query?.trim().toLowerCase() ?? "";
+    return (props.plugins ?? [])
+      .filter((plugin) => !query.category || plugin.category === query.category)
+      .filter(
+        (plugin) =>
+          !text ||
+          plugin.name.toLowerCase().includes(text) ||
+          plugin.tagline.toLowerCase().includes(text) ||
+          plugin.creatorName.toLowerCase().includes(text),
+      )
+      .slice(0, query.limit ?? 50)
+      .map((plugin) => ({
+        id: plugin.id,
+        name: plugin.name,
+        description: plugin.tagline,
+        creatorName: plugin.creatorName,
+        creatorAvatarUrl: plugin.creatorAvatarUrl,
+        category: plugin.category,
+        plugin,
+      }));
+  }
+
+  /** The plugin whose page is open over the plugin listing, as the agent half holds its own detail. */
+  const [openPlugin, setOpenPlugin] = createSignal<PluginDetail | null>(null);
+  function showPlugin(plugin: PluginDetail) {
+    enterDetails(plugin.name, closePlugin);
+    setOpenPlugin(plugin);
+  }
+  function closePlugin() {
+    setOpenPlugin(null);
+    leaveDetails();
+  }
+
+  /* No `onCopyLink` is given: `openbot.run/plugins/<slug>` is not served yet, so the page withholds
+     the button rather than copy an address that answers 404. The listing still carries `shareUrl`,
+     so the button returns with the route. */
+  function openPluginUrl(url: string) {
+    const safe = safeBrowserUrl(url);
+    if (!safe) return;
+    void window.openbot.openUrl(safe).catch(() => setError("Could not open the link."));
+  }
+
+  /**
+   * The names of the MCP servers this host already holds. A plugin reads as installed when every
+   * app it publishes is among them and the selected agent holds every skill it pins, so a server or
+   * a skill the user removed by hand stops being reported as installed on the next read. Both sides
+   * are read back from the host rather than from a record of what an install once did.
+   */
+  const [hostMcpNames, setHostMcpNames] = createSignal<readonly string[]>([]);
+  const pluginInstalled = (plugin: PluginDetail) =>
+    (plugin.apps.length > 0 || plugin.skills.length > 0) &&
+    plugin.apps.every((app) => hostMcpNames().includes(app.server.name)) &&
+    plugin.skills.every((skill) => installedById().has(skill.id));
+
+  async function loadHostMcpNames(serverId: string) {
+    const configs = await run(() => window.openbot.agent.listMcpServers(serverId));
+    if (configs) setHostMcpNames(configs.map((config) => config.name));
+  }
+
+  /**
+   * One install, both halves: the plugin's skills go to the selected agent, and its apps become MCP
+   * servers on this host. The two land in different places because that is what they are - a skill
+   * is one agent's instructions, and an MCP server is held by the host that runs the agents.
+   *
+   * The skills go first, so a failure never leaves a server standing that nothing knows how to
+   * drive. If a later step fails, the skills this attempt installed are removed again; a skill the
+   * agent already had is left alone, because the user put it there and this attempt did not.
+   */
+  async function installPlugin(plugin: PluginDetail) {
+    const serverId = props.pluginServerId;
+    if (!serverId) {
+      setError("Select a local server to install a plugin.");
+      return;
+    }
+    const agentId = market.browse.targetAgentId;
+    if (plugin.skills.length > 0 && !agentId) {
+      setError("Choose an agent to install this plugin's skills.");
+      return;
+    }
+    setBusy(`plugin:${plugin.id}`);
+    const installed = await run(async () => {
+      const added: string[] = [];
+      try {
+        for (const skill of plugin.skills) {
+          const held = installedById().has(skill.id);
+          await window.openbot.skills.install({ agentId, skillId: skill.id, versionId: skill.versionId });
+          if (!held) added.push(skill.id);
+        }
+        for (const app of plugin.apps) {
+          const config = createPluginAppConfig(app);
+          const invalid = Object.values(mcpConfigErrors(config))[0];
+          if (invalid) throw new Error(`${app.name} cannot be added: ${invalid}`);
+          setHostMcpNames((await window.openbot.agent.saveMcpServer({ config }, serverId)).map((saved) => saved.name));
+        }
+      } catch (error) {
+        for (const skillId of added) await window.openbot.skills.uninstall({ agentId, skillId }).catch(() => undefined);
+        throw error;
+      }
+      return true;
+    });
+    /* Only on success: reading the list again starts by clearing the panel, which would take the
+       failure off the screen before the reader saw it. */
+    if (installed && plugin.skills.length > 0) await loadInstalled(agentId);
+    setBusy(null);
+  }
+
   let installedRequest = 0;
   const installedById = createMemo(
     () =>
@@ -174,6 +308,16 @@ export function SkillsMarketplaceModal(props: SkillsMarketplaceModalProps) {
         state.browse.targetAgentId = state.browse.targetAgentId || props.activeAgentId || props.agents[0]?.id || "";
       });
       void loadSkills();
+    },
+  );
+
+  /* Read when the Plugins tab is on screen, not when the dialog opens: most visits never reach it,
+     and the answer is only needed to say which listings are already installed. */
+  createEffect(
+    () => (props.open && market.browse.kind === "plugins" ? props.pluginServerId : undefined),
+    (serverId) => {
+      if (serverId) void loadHostMcpNames(serverId);
+      else setHostMcpNames([]);
     },
   );
 
@@ -565,14 +709,14 @@ export function SkillsMarketplaceModal(props: SkillsMarketplaceModalProps) {
                     <SlidingTabs.Trigger value="plugins">Plugins</SlidingTabs.Trigger>
                     <SlidingTabs.Trigger value="skills">Skills</SlidingTabs.Trigger>
                   </SlidingTabs.List>
-                  <Show when={market.browse.kind !== "plugins" && market.browse.tab === "discover"}>
+                  <Show when={market.browse.kind === "plugins" || market.browse.tab === "discover"}>
                     <label class="search-field skills-marketplace-search">
                       <span class="sr-only">{`Search ${market.browse.kind}`}</span>
                       <Search aria-hidden="true" />
                       <Input
                         type="search"
                         aria-label={`Search ${market.browse.kind}`}
-                        placeholder={`Search by creator or ${market.browse.kind === "skills" ? "skill" : "agent"} name`}
+                        placeholder={`Search by creator or ${SEARCH_SUBJECT[market.browse.kind]} name`}
                         value={searchQuery()}
                         onValueChange={setSearchQuery}
                       />
@@ -826,9 +970,59 @@ description: Turn merged work into clear, consistent release notes.
                 </Show>
                 <Show when={market.browse.kind === "plugins"}>
                   <div class="skills-marketplace-panel">
-                    <div class="skills-marketplace-state" role="status">
-                      Plugins are not in the marketplace yet.
-                    </div>
+                    {/* The panel keeps its own copy of the message: a failed install on the plugin
+                        page is reported where the page is, not on the skills panel. */}
+                    <Show when={panel.error}>
+                      {(message) => (
+                        <div class="skills-marketplace-error" role="alert">
+                          {message()}
+                        </div>
+                      )}
+                    </Show>
+                    <Show
+                      when={props.plugins?.length}
+                      fallback={
+                        <div class="skills-marketplace-state" role="status">
+                          Plugins are not in the marketplace yet.
+                        </div>
+                      }
+                    >
+                      {/* The listing and its page, arranged as the agent half arranges them: the rows
+                          stay mounted and inert under the page, so leaving it keeps their scroll. */}
+                      <div hidden={Boolean(openPlugin())} inert={Boolean(openPlugin())}>
+                        <MarketplaceCatalog
+                          kind="plugins"
+                          query={searchQuery()}
+                          refreshVersion={0}
+                          list={async (query) => ({ items: listPlugins(query), nextCursor: null })}
+                          icon={(row) => <PluginIcon iconUrl={row.plugin.iconUrl} />}
+                          onOpen={(row) => showPlugin(row.plugin)}
+                        />
+                      </div>
+                      <Show when={openPlugin()} keyed>
+                        {(plugin) => (
+                          <MarketplacePluginDetail
+                            plugin={plugin}
+                            agents={props.agents}
+                            targetAgentId={market.browse.targetAgentId}
+                            onTargetChange={(id) =>
+                              setMarket((state) => {
+                                state.browse.targetAgentId = id;
+                              })
+                            }
+                            installed={pluginInstalled(plugin)}
+                            busy={panel.busy === `plugin:${plugin.id}`}
+                            onInstall={() => installPlugin(plugin)}
+                            onRunPrompt={
+                              props.onRunPluginPrompt && market.browse.targetAgentId
+                                ? (prompt) => props.onRunPluginPrompt?.(market.browse.targetAgentId, prompt)
+                                : undefined
+                            }
+                            onOpenUrl={openPluginUrl}
+                          />
+                        )}
+                      </Show>
+                    </Show>
                   </div>
                 </Show>
                 <Show when={market.browse.kind === "agents"}>
@@ -1476,47 +1670,6 @@ function marketplaceErrorMessage(cause: unknown): string {
     return "That skill name is already taken. Choose a different name in SKILL.md, then try again.";
   }
   return message;
-}
-
-function AgentSelect(props: {
-  agents: Array<{ id: string; name: string }>;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const selected = () => props.agents.find((agent) => agent.id === props.value) ?? null;
-  /* The list belongs to the dialog, as in the settings modal: outside it the dialog hides it from
-     assistive technology. */
-  const [mount, setMount] = createSignal<HTMLElement | undefined>();
-  let root: HTMLElement | undefined;
-  return (
-    <Select<{ id: string; name: string }>
-      ref={(element: HTMLElement) => {
-        root = element;
-      }}
-      // The dialog is in the tree only once the control is, so the list finds it as it opens.
-      onOpenChange={(open) => {
-        if (open) setMount(root?.closest<HTMLElement>(".skills-marketplace") ?? undefined);
-      }}
-      class="skills-agent-select"
-      options={props.agents}
-      value={selected()}
-      optionValue="id"
-      optionTextValue="name"
-      disabled={!props.agents.length}
-      onChange={(option) => {
-        if (option) props.onChange(option.id);
-      }}
-      itemComponent={(item) => <SelectItem item={item.item}>{item.item.rawValue.name}</SelectItem>}
-    >
-      {/* The control sits beside the install button, which says what the target is for. */}
-      <SelectTrigger size="sm" aria-label="Install to">
-        <SelectValue<{ id: string; name: string }>>
-          {(state) => state.selectedOption()?.name ?? "No local agents"}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent mount={mount()} />
-    </Select>
-  );
 }
 
 function SkillIcon(props: { skill: { name: string; iconUrl: string | null } }) {
