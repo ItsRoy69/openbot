@@ -486,6 +486,7 @@ export function createConversationViewScope(props: ConversationProps) {
   let scrollElement: HTMLDivElement | undefined;
   let virtualRoot: HTMLDivElement | undefined;
   let agentActivitySlot: HTMLDivElement | undefined;
+  let requiredInteractionElement: HTMLDivElement | undefined;
   let scrollResizeObserver: ResizeObserver | undefined;
   let unreadMessagesDivider: HTMLDivElement | undefined;
   let latestScrollFrame: number | undefined;
@@ -630,6 +631,7 @@ export function createConversationViewScope(props: ConversationProps) {
     if (scrollElement) scrollResizeObserver.observe(scrollElement);
     if (virtualRoot) scrollResizeObserver.observe(virtualRoot);
     if (agentActivitySlot) scrollResizeObserver.observe(agentActivitySlot);
+    if (requiredInteractionElement) scrollResizeObserver.observe(requiredInteractionElement);
     requestAnimationFrame(() => {
       if (!scrollElement) return;
       updateVirtualScrollMargin();
@@ -969,6 +971,11 @@ export function createConversationViewScope(props: ConversationProps) {
     agentActivitySlot = element;
     scrollResizeObserver?.observe(element);
   };
+  const setRequiredInteractionElement = (element: HTMLDivElement | undefined) => {
+    if (requiredInteractionElement) scrollResizeObserver?.unobserve(requiredInteractionElement);
+    requiredInteractionElement = element;
+    if (element) scrollResizeObserver?.observe(element);
+  };
   const setBrowserSurfaceElement = (element: HTMLDivElement | undefined) => {
     setBrowserSurface(element);
   };
@@ -1102,6 +1109,7 @@ export function createConversationViewScope(props: ConversationProps) {
     setExpandedEmojiMessageId,
     setOpenMoreMessageId,
     setOpenReactionMessageId,
+    setRequiredInteractionElement,
     handleRoutineSettingsRequest,
     setSettingsPanelWidth,
     setShowComposerActions,
