@@ -21,6 +21,8 @@ export const INPUT_LIMITS = {
   agentMemories: 64,
   agentMemoriesSoft: 32,
   agentSkills: 32,
+  sharedTables: 64,
+  sharedTableName: 64,
   // Half the agent cap. A channel packet is rebuilt every turn and the memories block is paid in
   // full each time, against `ChannelHistory.prepare`'s hard character budget.
   channelMemories: 32,

@@ -60,6 +60,7 @@ import type {
   SetAgentAvatarInput,
   SetMessageReactionInput,
   SetTeamTypingInput,
+  SharedTable,
   SidebarLayoutSnapshot,
   SkillSubmission,
   SteerQueuedMessageInput,
@@ -105,6 +106,7 @@ import {
   STORY_REMOTE_DESKTOP_SESSION,
   STORY_SERVERS,
   STORY_SESSIONS,
+  STORY_SHARED_TABLES,
   STORY_SKILL_PACKAGE_PREVIEW,
   STORY_SKILL_SUBMISSIONS,
   STORY_SNAPSHOTS,
@@ -146,6 +148,7 @@ export interface MockOpenBotOptions {
   remoteDesktopSessions?: RemoteDesktopSession[];
   updateStatus?: UpdateStatus;
   memories?: Record<string, AgentMemory[]>;
+  tables?: SharedTable[];
   routines?: Record<string, Routine[]>;
   localSkills?: MarketplaceSkillDetail[];
   installedSkills?: Record<string, InstalledSkill[]>;
@@ -300,8 +303,6 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
   let remoteDesktopSessions = clone(options.remoteDesktopSessions ?? [STORY_REMOTE_DESKTOP_SESSION]);
   let updateStatus = clone(options.updateStatus ?? STORY_UPDATE_STATUS);
   const usage = clone(options.usage ?? STORY_USAGE);
-  const usageTarget = agents[0];
-  const usageTargetKey = usageTarget ? `${usageTarget.provider}:${usageTarget.model}` : null;
   let agentCounter = agents.length;
   const marketplaceSkills = clone(STORY_MARKETPLACE_SKILLS);
   const localSkills = clone(
@@ -399,6 +400,7 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
   const queueEdits = new Map<string, { agentId: string; delivery: QueueDelivery }>();
   const queues = new Map<string, QueueSnapshot>(agents.map((agent) => [agent.id, emptyQueue(agent.id)]));
   const memories = new Map<string, AgentMemory[]>(Object.entries(clone(options.memories ?? {})));
+  let tables: SharedTable[] = clone(options.tables ?? STORY_SHARED_TABLES);
   const routines = new Map<string, Routine[]>(Object.entries(clone(options.routines ?? {})));
   const routineRuns = new Map<string, RoutineRun[]>();
 
@@ -1172,8 +1174,11 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
         return mockAgentAnalytics(input, agent);
       },
       getUsage: async (agentId) => {
+        if (!agentId) return clone(usage);
         const agent = agents.find((candidate) => candidate.id === agentId);
-        return clone(agent && `${agent.provider}:${agent.model}` === usageTargetKey ? usage : { limits: [] });
+        return clone({
+          limits: agent ? usage.limits.filter((limit) => limit.id === agent.provider) : [],
+        });
       },
       // A saved endpoint's models are composed here, not stored, so a removal drops them the way a
       // respawned OpenCode would: it lists what its config names and nothing else.
@@ -1387,6 +1392,10 @@ export function createMockOpenBot(options: MockOpenBotOptions = {}): MockOpenBot
       clearMemories: async (agentId) => {
         memories.delete(agentId);
         emitAgentEvent({ type: "memories-changed", agentId });
+      },
+      listTables: async () => clone(tables),
+      deleteTable: async (input) => {
+        tables = tables.filter((table) => table.name !== input.name);
       },
       listRoutines: async (agentId) => clone(routines.get(agentId) ?? []),
       createRoutine: async (input) => {

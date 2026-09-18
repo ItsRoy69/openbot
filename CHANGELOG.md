@@ -5,6 +5,41 @@ All notable changes to OpenBot will be documented here. The project follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-18
+
+### Added
+
+- Install an app and its skills together from the new Marketplace **Plugins** tab. Each plugin adds
+  its MCP server record and the pinned skill versions its instructions need.
+- Let agents keep records in one shared database at `~/OpenBot/Shared/Data/agent-data.db`. An agent
+  creates, reads and writes its own tables, and the **Shared tables** view lists every table with its
+  owner and lets you delete any of them.
+- Let an agent tell a teammate something without asking for an answer. The message names that no
+  reply is due, so the teammate does not open a turn for it.
+- Let the agent complete provider authorization steps itself instead of stopping for the user.
+- Show the remaining usage for every connected provider, and show the Grok account email.
+
+### Changed
+
+- Handle an exhausted provider usage limit: the agent reports the limit and the time it resets
+  instead of failing the turn.
+- Open a browser takeover page from its preview card. A takeover request no longer expands the
+  browser over the conversation on its own.
+- Open an attached file in the right panel instead of a modal.
+- Group the agent chat message times, and correct the position of a message timestamp.
+- Use a custom agent avatar in the activity indicator.
+- Remove the **View source** toggle from a Markdown preview.
+
+### Fixed
+
+- Drop the placeholder answer that an agent sent for a teammate request.
+- Load an OpenCode ACP session before reading it at startup.
+- Remove the duplicated agent message previews.
+- Save an edited agent instruction again.
+- Keep a required input prompt visible.
+- Type into the focused page when the browser cannot target an element.
+- Keep the agent recipient menu text readable.
+
 ## [0.12.0] - 2026-09-17
 
 ### Added

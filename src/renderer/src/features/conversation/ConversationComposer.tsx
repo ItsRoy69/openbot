@@ -42,6 +42,7 @@ export function ConversationComposer() {
     currentDraft,
     dismissCurrentChatErrors,
     installedSkills,
+    mcpServers,
     editQueuedMessage,
     editingDeliveryId,
     editingPendingSave,
@@ -103,6 +104,7 @@ export function ConversationComposer() {
     const provider = props.agent?.provider;
     if (!provider || signInRequired()) return null;
     for (const limit of props.accountUsage?.limits ?? []) {
+      if (limit.id !== provider) continue;
       for (const plan of [limit.primary, limit.secondary]) {
         if (!plan || plan.usedPercent < 100) continue;
         if (plan.resetsAt !== null && plan.resetsAt * 1_000 <= now()) continue;
@@ -263,6 +265,7 @@ export function ConversationComposer() {
               agentId={props.agent?.id}
               agents={props.agents}
               skills={installedSkills()}
+              mcpServers={mcpServers()}
               attachments={currentDraft().attachments}
               value={currentDraft().text}
               disabled={

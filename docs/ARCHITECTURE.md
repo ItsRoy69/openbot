@@ -75,6 +75,16 @@ the `media-attachments` capability; released protocol adapters keep their existi
   Nothing copies it first, so `src/backend/browser-state.ts` re-validates every bound it reads rather
   than trusting it: a tab whose environment fails validation is still returned, without that
   environment, because losing the user's open tab is worse than losing an emulated viewport.
+- `~/OpenBot/Shared/Data/agent-data.db` is one SQLite file that holds every table the agents create
+  for themselves, outside `openbot.db` and outside the migration runner. One file gives the agents
+  one namespace and lets them join across each other's tables. Every agent can read and write every
+  table; the `openbot_metadata` table records the agent that created each one, and that owner is the
+  only agent allowed to drop or alter it. SQLite's own authorizer refuses the other cases, so the
+  rule does not depend on reading the model's SQL. The agents own these schemas, so nothing copies
+  or migrates them before a release, and a table stays when the agent that made it is deleted. The
+  user deletes one from agent settings, which is the only way to remove a table whose owner is gone.
+  The guidance the agents read ships as the managed skill `resources/managed-skills/openbot-data`,
+  beside site hosting and the skill creator, so the always-on prompt only names the tools.
 - Renderer signals and stores are projections for the current screen only. They are not durable
   state, and one concern is one record - a row of parallel signals over its fields lets a screen
   hold states the product does not have.
@@ -899,3 +909,9 @@ a file in the share sheet. The thumbnail reads the attachment through the query 
 so a file already read in a message is not fetched again. The editor changes the text, removes the
 files the message already has, and adds new ones.
 
+
+## Plugin distribution
+
+A plugin is one developer's bundle: an MCP server, shown as an app, the skills that drive it, and the listing text. The catalog of available plugins is a static file set that the Account Worker serves from `openbot.run` without an account, and the main process keeps a copy in the user-data directory rather than in SQLite, because a remote catalog is a cache and not the source of truth. An install saves the app as a host-global MCP server and installs the pinned skills into the chosen agent. A share link at `openbot.run/plugins/<slug>` opens a public page, and `openbot://plugins/<slug>` opens the listing in the app; neither one installs anything.
+
+See [plugin distribution and sharing](plugin-distribution.md) for the catalog shape, the fetch and cache rules, the install and uninstall order, the deep-link parser rules, and the security review. Only the last part of that design runs today: the Plugins tab reads a literal catalog in the renderer, installs the listing's pinned skills into the chosen agent, and saves its app as a host-global MCP server. The catalog files, the Worker routes, the cache in the main process, uninstall, and the links are still design.
