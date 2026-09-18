@@ -516,6 +516,19 @@ transaction. Creation follows the existing workspace/initial-message flow with
 cleanup on failure. Receipts make retries after a lost response return the saved
 agent. This does not introduce a schema migration or alter released protocol codecs.
 
+## Agent personal memory
+
+Each agent keeps a personal memory (`projection_agent_memories`) that survives restarts, provider
+switches, and workspace moves. `remember`, `search_memories`, `list_memories`, `update_memory`, and
+`forget_memory` are declared in `src/backend/openbot-tools.ts` like the other dynamic tools: Codex
+and Grok receive them as tool definitions, and Claude sees them through its SDK MCP bridge. A staged
+write takes effect only when the turn that produced it completes. Rows are capped hard at
+`agentMemories`; past the soft cap a write reaps the least-recent automatic memories, never a manual
+one, and the FTS5 index keeps compacted memories searchable. Migration 21 adds the `tags` column and
+the external-content index; the schema-parity test pins both build paths to the same shape. The
+released Team API memory route, the IPC memory handlers, and the inputs memory block are unchanged.
+See [docs/personal-memory.md](personal-memory.md) for the full design.
+
 ## Mobile product analytics
 
 `apps/mobile/src/features/analytics` owns the React Native OpenPanel client, typed event allowlists,

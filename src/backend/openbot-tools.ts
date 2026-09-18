@@ -17,6 +17,9 @@ interface OpenBotToolDefinition {
   shape: z.ZodRawShape;
 }
 
+const memoryTagZodSchema = z.string().trim().min(1).max(INPUT_LIMITS.memoryTagText);
+const memoryTagsZodSchema = z.array(memoryTagZodSchema).min(1).max(INPUT_LIMITS.memoryTags);
+
 /** Shared declarations for Codex, Grok, and Claude. Service handlers enforce execution rules. */
 export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
   ...CHANNEL_TOOL_DEFINITIONS,
@@ -160,10 +163,43 @@ export const OPENBOT_TOOL_DEFINITIONS: readonly OpenBotToolDefinition[] = [
   {
     name: "remember",
     description:
-      "Stage one short, durable memory for this agent. Use memoryId to correct or consolidate an existing memory. The change commits only if the current turn completes.",
+      "Stage one short, durable memory for this agent, labeled with a few lowercase tags so search_memories can find it again. Use memoryId to correct or consolidate an existing memory. The change commits only if the current turn completes.",
     shape: {
       text: z.string().min(1).max(INPUT_LIMITS.agentMemoryText),
       memoryId: z.string().optional(),
+      tags: memoryTagsZodSchema.optional(),
+    },
+  },
+  {
+    name: "search_memories",
+    description:
+      "Search this agent's saved memories by full text and by tags. A query matches memory text and tags; tags filters to memories that carry every listed tag. Ranked by relevance, then recency.",
+    shape: {
+      query: z
+        .string()
+        .max(INPUT_LIMITS.memorySearchQuery)
+        .describe("Full-text query. Plain words work best; phrases need quotes.")
+        .optional(),
+      tags: memoryTagsZodSchema.optional(),
+      limit: z.number().int().min(1).max(INPUT_LIMITS.memorySearchResults).optional(),
+    },
+  },
+  {
+    name: "list_memories",
+    description:
+      "List this agent's saved memories, most recently updated first. Use it to see what a search missed or to pick a memoryId.",
+    shape: {
+      limit: z.number().int().min(1).max(INPUT_LIMITS.memorySearchResults).optional(),
+    },
+  },
+  {
+    name: "update_memory",
+    description:
+      "Stage a change to one saved memory of this agent: replace its text, retag it with tags, or both. Pass at least one of text and tags; tags replaces the existing labels. The change commits only if the current turn completes.",
+    shape: {
+      memoryId: z.string().min(1),
+      text: z.string().min(1).max(INPUT_LIMITS.agentMemoryText).optional(),
+      tags: memoryTagsZodSchema.optional(),
     },
   },
   {

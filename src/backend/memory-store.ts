@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type { AgentMemoryOrigin, MemoryEntry } from "@openbot/contracts/ipc";
-import { type DynamicRecord, isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
+import { type DynamicRecord, isDynamicRecord, isNumber, isString } from "@openbot/contracts/runtime-values";
 import type { OpenBotDatabase } from "./openbot-database";
 
 /**
@@ -20,6 +20,8 @@ export interface MemoryTables {
   aggregateType: "agent-memory" | "channel-memory";
   limit: number;
   limitMessage: string;
+  softLimit: number;
+  hasTags: boolean;
 }
 
 export interface SaveAutomaticMemory {
@@ -27,6 +29,7 @@ export interface SaveAutomaticMemory {
   text: string;
   sourceTurnId: string;
   expectedUpdatedAt?: string | null;
+  tags?: string[];
   /**
    * A deterministic command id makes the write exactly-once. A channel tool passes the id of its
    * own call, so a retried call reads the receipt instead of saving again. An agent turn stages its
@@ -35,14 +38,23 @@ export interface SaveAutomaticMemory {
   commandId?: string;
 }
 
+export interface MemorySearchOptions {
+  query?: string;
+  tags?: string[];
+  limit?: number;
+}
+
 export class MemoryStore {
   readonly #columns: string;
+  readonly #ftsTable: string | null;
 
   constructor(
     readonly database: OpenBotDatabase,
     protected readonly tables: MemoryTables,
   ) {
     this.#columns = `memory_id, text, origin, source_turn_id, created_at, updated_at`;
+    if (tables.hasTags) this.#columns += `, tags`;
+    this.#ftsTable = tables.hasTags ? `${tables.table}_fts` : null;
   }
 
   list(ownerId: string): MemoryEntry[] {
@@ -71,18 +83,23 @@ export class MemoryStore {
     return row ? memoryFromRow(row) : null;
   }
 
-  createManual(ownerId: string, text: string): MemoryEntry {
-    return this.save(ownerId, { text, origin: "manual", sourceTurnId: null });
+  createManual(ownerId: string, text: string, tags?: string[]): MemoryEntry {
+    return this.save(ownerId, { text, origin: "manual", sourceTurnId: null, tags });
   }
 
   duplicate(sourceOwnerId: string, targetOwnerId: string): MemoryEntry[] {
     return this.list(sourceOwnerId).map((memory) =>
-      this.save(targetOwnerId, { text: memory.text, origin: memory.origin, sourceTurnId: null }),
+      this.save(targetOwnerId, {
+        text: memory.text,
+        origin: memory.origin,
+        sourceTurnId: null,
+        tags: memory.tags,
+      }),
     );
   }
 
-  updateManual(ownerId: string, memoryId: string, text: string): MemoryEntry {
-    return this.save(ownerId, { memoryId, text, origin: "manual", sourceTurnId: null });
+  updateManual(ownerId: string, memoryId: string, text: string, tags?: string[]): MemoryEntry {
+    return this.save(ownerId, { memoryId, text, origin: "manual", sourceTurnId: null, tags });
   }
 
   /**
@@ -102,6 +119,7 @@ export class MemoryStore {
       origin: "automatic",
       sourceTurnId: input.sourceTurnId,
       commandId: input.commandId,
+      tags: input.tags,
     });
   }
 
@@ -151,10 +169,6 @@ export class MemoryStore {
     );
   }
 
-  /**
-   * Validate, fold a duplicate, cap the owner, then keep `updatedAt` strictly increasing so the
-   * `ORDER BY updated_at DESC` above is stable when two saves land in the same millisecond.
-   */
   protected save(
     ownerId: string,
     input: {
@@ -163,10 +177,12 @@ export class MemoryStore {
       origin: AgentMemoryOrigin;
       sourceTurnId: string | null;
       commandId?: string;
+      tags?: string[];
     },
   ): MemoryEntry {
     const text = validateMemoryText(input.text);
     const normalizedText = normalizeMemoryText(text);
+    const parsedTags = this.tables.hasTags && input.tags !== undefined ? validateMemoryTags(input.tags) : undefined;
     const duplicate = this.#findByNormalizedText(ownerId, normalizedText);
     if (duplicate && duplicate.id !== input.memoryId) {
       if (input.memoryId) this.delete(ownerId, input.memoryId);
@@ -176,6 +192,7 @@ export class MemoryStore {
     const previous = input.memoryId ? this.get(ownerId, input.memoryId) : null;
     if (input.memoryId && !previous) throw new Error("This memory no longer exists.");
     if (!previous && this.list(ownerId).length >= this.tables.limit) throw new Error(this.tables.limitMessage);
+    const tags = this.tables.hasTags ? (parsedTags ?? previous?.tags ?? []) : undefined;
 
     const now = new Date().toISOString();
     const updatedAt =
@@ -188,6 +205,7 @@ export class MemoryStore {
       createdAt: previous?.createdAt ?? now,
       updatedAt,
     };
+    if (tags !== undefined) memory.tags = tags;
     const { aggregateType, table, ownerColumn } = this.tables;
     const eventType = `${aggregateType}.${previous ? "updated" : "created"}`;
     this.database.dispatch(
@@ -204,15 +222,15 @@ export class MemoryStore {
         db.prepare(
           `INSERT INTO ${table} (
              memory_id, ${ownerColumn}, text, normalized_text, origin, source_turn_id,
-             created_at, updated_at, last_event_sequence
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_at, updated_at, last_event_sequence${this.tables.hasTags ? ", tags" : ""}
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${this.tables.hasTags ? ", ?" : ""})
            ON CONFLICT(memory_id) DO UPDATE SET
              text = excluded.text,
              normalized_text = excluded.normalized_text,
              origin = excluded.origin,
              source_turn_id = excluded.source_turn_id,
              updated_at = excluded.updated_at,
-             last_event_sequence = excluded.last_event_sequence`,
+             last_event_sequence = excluded.last_event_sequence${this.tables.hasTags ? ", tags = excluded.tags" : ""}`,
         ).run(
           memory.id,
           ownerId,
@@ -223,11 +241,87 @@ export class MemoryStore {
           memory.createdAt,
           memory.updatedAt,
           sequences[0] ?? 0,
+          ...(this.tables.hasTags ? [tags === undefined ? "[]" : JSON.stringify(tags)] : []),
         );
         return memory;
       },
     );
+    if (!previous) this.#compact(ownerId);
     return memory;
+  }
+
+  search(ownerId: string, options: MemorySearchOptions = {}): MemoryEntry[] {
+    const limit = Math.min(options.limit ?? INPUT_LIMITS.memorySearchResults, INPUT_LIMITS.memorySearchResults);
+    const query = options.query?.trim() ?? "";
+    const tags = options.tags ?? [];
+    for (const tag of tags) validateMemoryTags([tag]);
+    const ownerColumn = this.tables.ownerColumn;
+    const tagFilter = tags
+      .map(() => `EXISTS (SELECT 1 FROM json_each(m.tags) WHERE json_each.value = ?)`)
+      .join(" AND ");
+
+    if (!query && tags.length === 0) return this.list(ownerId).slice(0, limit);
+
+    const columns = this.#columns
+      .split(", ")
+      .map((column) => `m.${column}`)
+      .join(", ");
+
+    if (query) {
+      if (!this.#ftsTable) throw new Error("Full-text memory search is not available here.");
+      let rows: unknown;
+      try {
+        rows = this.database.connection
+          .prepare(
+            `SELECT ${columns}
+             FROM ${this.tables.table} AS m
+             JOIN ${this.#ftsTable} AS f ON f.rowid = m.rowid
+             WHERE m.${ownerColumn} = ? AND f.${this.#ftsTable} MATCH ?
+               ${tagFilter ? `AND ${tagFilter}` : ""}
+             ORDER BY bm25(f.${this.#ftsTable}, 4.0, 2.0), m.updated_at DESC, m.memory_id
+             LIMIT ?`,
+          )
+          .all(ownerId, query, ...tags, limit);
+      } catch (error) {
+        if (error instanceof Error && /syntax error/i.test(error.message))
+          throw new Error("The memory search query is not valid.");
+        throw error;
+      }
+      return databaseRows(rows).map(memoryFromRow);
+    }
+
+    const rows = this.database.connection
+      .prepare(
+        `SELECT ${columns}
+         FROM ${this.tables.table} AS m
+         WHERE m.${ownerColumn} = ?${tagFilter ? ` AND ${tagFilter}` : ""}
+         ORDER BY m.updated_at DESC, m.memory_id
+         LIMIT ?`,
+      )
+      .all(ownerId, ...tags, limit);
+    return databaseRows(rows).map(memoryFromRow);
+  }
+
+  #compact(ownerId: string): void {
+    const { table, ownerColumn, softLimit } = this.tables;
+    if (softLimit <= 0 || !this.tables.hasTags) return;
+    const row = databaseRow(
+      this.database.connection.prepare(`SELECT count(*) AS count FROM ${table} WHERE ${ownerColumn} = ?`).get(ownerId),
+    );
+    const count = row && isNumber(row.count) ? row.count : 0;
+    if (count <= softLimit) return;
+    const automatic = databaseRows(
+      this.database.connection
+        .prepare(
+          `SELECT ${this.#columns}
+           FROM ${table}
+           WHERE ${ownerColumn} = ? AND origin = 'automatic'
+           ORDER BY updated_at ASC, memory_id ASC
+           LIMIT ?`,
+        )
+        .all(ownerId, count - softLimit),
+    ).map(memoryFromRow);
+    for (const memory of automatic) this.delete(ownerId, memory.id);
   }
 
   #findByNormalizedText(ownerId: string, normalizedText: string): MemoryEntry | null {
@@ -292,12 +386,44 @@ function requiredStringColumn(row: DynamicRecord, key: string): string {
   return value;
 }
 
+function validateMemoryTags(value: string[] | undefined): string[] {
+  if (value === undefined || value.length === 0) return [];
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== "string") throw new Error("Memory tags must be text.");
+    const tag = raw.trim();
+    if (!tag) throw new Error("Memory tags must not be empty.");
+    if (tag.length > INPUT_LIMITS.memoryTagText) throw new Error("A memory tag is too long.");
+    if (tags.length >= INPUT_LIMITS.memoryTags) throw new Error("A memory can carry only a few tags.");
+    const key = tag.toLocaleLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      tags.push(tag);
+    }
+  }
+  return tags;
+}
+
+function decodeMemoryTags(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!isString(value)) throw new Error("Invalid memory tags.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("Invalid memory tags.");
+  }
+  if (!Array.isArray(parsed)) throw new Error("Invalid memory tags.");
+  return validateMemoryTags(parsed);
+}
+
 function memoryFromRow(row: DynamicRecord): MemoryEntry {
   const origin = requiredStringColumn(row, "origin");
   if (origin !== "automatic" && origin !== "manual") throw new Error("Invalid memory origin.");
   const sourceTurnId = row.source_turn_id;
   if (sourceTurnId !== null && !isString(sourceTurnId)) throw new Error("Invalid memory source turn.");
-  return {
+  const memory: MemoryEntry = {
     id: requiredStringColumn(row, "memory_id"),
     text: requiredStringColumn(row, "text"),
     origin,
@@ -305,4 +431,7 @@ function memoryFromRow(row: DynamicRecord): MemoryEntry {
     createdAt: requiredStringColumn(row, "created_at"),
     updatedAt: requiredStringColumn(row, "updated_at"),
   };
+  const tags = decodeMemoryTags(row.tags);
+  if (tags !== undefined) memory.tags = tags;
+  return memory;
 }

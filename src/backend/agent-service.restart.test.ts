@@ -158,6 +158,13 @@ describe.sequential("AgentService: restart", () => {
     // Version 14 changes session state only. Reopen the version 13 database to run the shipped upgrade.
     // Every later version goes too: a history that keeps 15 but drops 14 has a gap, which the
     // schema check rejects before any upgrade runs.
+    store.database.connection.exec(`
+      DROP TRIGGER IF EXISTS projection_agent_memories_ai;
+      DROP TRIGGER IF EXISTS projection_agent_memories_ad;
+      DROP TRIGGER IF EXISTS projection_agent_memories_au;
+      DROP TABLE IF EXISTS projection_agent_memories_fts;
+      ALTER TABLE projection_agent_memories DROP COLUMN tags;
+    `);
     store.database.connection.prepare("DELETE FROM schema_migrations WHERE version >= 14").run();
     store.database.close();
 

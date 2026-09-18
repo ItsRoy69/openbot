@@ -282,6 +282,9 @@ describe("local agent usage", () => {
       db.exec(
         "DROP TABLE agent_usage_records; DROP TABLE agent_usage_checkpoints; DROP TABLE agent_usage_activity; DELETE FROM schema_migrations WHERE version >= 15; CREATE TABLE preservation(value TEXT); INSERT INTO preservation VALUES ('keep'); CREATE TABLE agent_usage_date (conflict TEXT)",
       );
+      db.exec(
+        "DROP TRIGGER IF EXISTS projection_agent_memories_ai; DROP TRIGGER IF EXISTS projection_agent_memories_ad; DROP TRIGGER IF EXISTS projection_agent_memories_au; DROP TABLE IF EXISTS projection_agent_memories_fts; ALTER TABLE projection_agent_memories DROP COLUMN tags",
+      );
       // Every later version goes with 15: a history that keeps 16 but drops 15 has a gap,
       // which the schema check rejects before any upgrade runs.
       // The squatted name is the index's, not a table's: the migration creates its tables with

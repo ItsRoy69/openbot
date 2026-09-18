@@ -21,8 +21,20 @@ type PendingMemoryMutation =
       epoch: number;
       memoryId?: string;
       text: string;
+      tags?: string[];
       sourceTurnId: string;
       expectedUpdatedAt?: string | null;
+    }
+  | {
+      callId: string;
+      type: "update";
+      agentId: string;
+      epoch: number;
+      memoryId: string;
+      text: string;
+      tags: string[];
+      sourceTurnId: string;
+      expectedUpdatedAt: string;
     }
   | {
       callId: string;
@@ -107,7 +119,7 @@ export class AgentMemories {
     this.#memories.duplicate(sourceAgentId, targetAgentId);
   }
 
-  /** The two `openbot` memory tools. Returns null when `tool` is not one of them. */
+  /** The four `openbot` memory tools. Returns null when `tool` is not one of them. */
   handleTool(params: DynamicToolCallParams, senderAgentId: string): OpenBotToolResponse | null {
     if (params.tool === "remember") {
       const args = params.arguments;
@@ -131,10 +143,46 @@ export class AgentMemories {
         epoch: this.#epoch(senderAgentId),
         ...(memoryId ? { memoryId } : {}),
         text,
+        ...(parseMemoryTags(args.tags) !== undefined ? { tags: parseMemoryTags(args.tags) } : {}),
         sourceTurnId: params.turnId,
         ...(memoryId ? { expectedUpdatedAt: current?.updatedAt ?? null } : {}),
       });
       return openBotToolResult({ status: "staged", memoryId: memoryId ?? null });
+    }
+
+    if (params.tool === "update_memory") {
+      const args = params.arguments;
+      if (
+        !isRecord(args) ||
+        !isString(args.memoryId) ||
+        args.memoryId.length === 0 ||
+        args.memoryId.length > INPUT_LIMITS.identifier
+      ) {
+        throw new Error("memoryId is required.");
+      }
+      const text = args.text;
+      if (
+        text !== undefined &&
+        (!isString(text) || text.trim().length === 0 || text.trim().length > INPUT_LIMITS.agentMemoryText)
+      ) {
+        throw new Error("Memory text is invalid.");
+      }
+      const tags = parseMemoryTags(args.tags);
+      if (text === undefined && tags === undefined) throw new Error("Update at least one of text and tags.");
+      const current = this.#memories.get(senderAgentId, args.memoryId);
+      if (!current) throw new Error("This memory does not belong to the current agent.");
+      this.#stage(params.turnId, {
+        callId: params.callId,
+        type: "update",
+        agentId: senderAgentId,
+        epoch: this.#epoch(senderAgentId),
+        memoryId: current.id,
+        text: text?.trim() ?? current.text,
+        tags: tags ?? current.tags ?? [],
+        sourceTurnId: params.turnId,
+        expectedUpdatedAt: current.updatedAt,
+      });
+      return openBotToolResult({ status: "staged", memoryId: current.id });
     }
 
     if (params.tool === "forget_memory") {
@@ -160,6 +208,25 @@ export class AgentMemories {
       return openBotToolResult({ status: "staged", memoryId: current.id });
     }
 
+    if (params.tool === "list_memories") {
+      return openBotToolResult({ memories: this.#memories.list(senderAgentId).slice(0, parseLimit(params.arguments)) });
+    }
+
+    if (params.tool === "search_memories") {
+      const args = params.arguments;
+      const query = args && isRecord(args) && args.query !== undefined && isString(args.query) ? args.query : undefined;
+      if (query !== undefined && query.length > INPUT_LIMITS.memorySearchQuery)
+        throw new Error("The memory search query is too long.");
+      const tags = args && isRecord(args) ? parseMemoryTags(args.tags) : undefined;
+      return openBotToolResult({
+        memories: this.#memories.search(senderAgentId, {
+          ...(query ? { query } : {}),
+          ...(tags !== undefined ? { tags } : {}),
+          ...{ limit: parseLimit(args) },
+        }),
+      });
+    }
+
     return null;
   }
 
@@ -174,8 +241,20 @@ export class AgentMemories {
       if (mutation.epoch !== this.#epoch(mutation.agentId)) continue;
       const before = JSON.stringify(this.#memories.list(mutation.agentId));
       try {
-        if (mutation.type === "remember") this.#memories.saveAutomatic(mutation);
-        else this.#memories.delete(mutation.agentId, mutation.memoryId, mutation.expectedUpdatedAt);
+        if (mutation.type === "remember") {
+          this.#memories.saveAutomatic(mutation);
+        } else if (mutation.type === "update") {
+          this.#memories.saveAutomatic({
+            agentId: mutation.agentId,
+            memoryId: mutation.memoryId,
+            text: mutation.text,
+            sourceTurnId: mutation.sourceTurnId,
+            expectedUpdatedAt: mutation.expectedUpdatedAt,
+            tags: mutation.tags,
+          });
+        } else {
+          this.#memories.delete(mutation.agentId, mutation.memoryId, mutation.expectedUpdatedAt);
+        }
       } catch (error) {
         this.#emitError("memory_commit_failed", error, mutation.agentId);
         continue;
@@ -208,4 +287,33 @@ export class AgentMemories {
   #epoch(agentId: string): number {
     return this.#epochs.get(agentId) ?? 0;
   }
+}
+
+function parseMemoryTags(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error("Memory tags must be a list of words.");
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const raw of value) {
+    if (!isString(raw)) throw new Error("Memory tags must be a list of words.");
+    const tag = raw.trim();
+    if (!tag) throw new Error("Memory tags must not be empty.");
+    if (tag.length > INPUT_LIMITS.memoryTagText) throw new Error("A memory tag is too long.");
+    if (tags.length >= INPUT_LIMITS.memoryTags) throw new Error("A memory can carry only a few tags.");
+    const key = tag.toLocaleLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      tags.push(tag);
+    }
+  }
+  return tags;
+}
+
+function parseLimit(args: unknown): number | undefined {
+  if (!isRecord(args) || args.limit === undefined) return undefined;
+  const limit = args.limit;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > INPUT_LIMITS.memorySearchResults) {
+    throw new Error("limit is invalid.");
+  }
+  return limit;
 }

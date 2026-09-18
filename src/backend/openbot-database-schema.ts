@@ -4,6 +4,7 @@ import { isGeneratedAgentId } from "@openbot/contracts/validation";
 import { createOpenBotLogger, toLogValue } from "@openbot/logging";
 import { CHANNEL_SCHEMA_SQL, CHANNEL_SETTINGS_SCHEMA_SQL } from "./channel-schema";
 import { MCP_SERVERS_SCHEMA_SQL } from "./mcp-schema";
+import { MEMORY_FTS_SCHEMA_SQL } from "./memory-schema";
 
 const BASELINE_SCHEMA_VERSION = 8;
 
@@ -310,6 +311,33 @@ const BASELINE_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provi
 
 const V17_PROVIDER_SESSIONS_CHECK_SQL = `provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude', 'grok', 'opencode')),`;
 
+const BASELINE_MEMORY_TABLE_SQL = `  CREATE TABLE IF NOT EXISTS projection_agent_memories (
+    memory_id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    normalized_text TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK(origin IN ('automatic', 'manual')),
+    source_turn_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_event_sequence INTEGER NOT NULL,
+    UNIQUE(agent_id, normalized_text)
+  );`;
+
+const LATEST_MEMORY_TABLE_SQL = `  CREATE TABLE IF NOT EXISTS projection_agent_memories (
+    memory_id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    normalized_text TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK(origin IN ('automatic', 'manual')),
+    source_turn_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_event_sequence INTEGER NOT NULL,
+    tags TEXT NOT NULL DEFAULT '[]',
+    UNIQUE(agent_id, normalized_text)
+  );`;
+
 // IF NOT EXISTS throughout, because this text is both migration 15 and the tail of the latest
 // schema. A database built from the latest schema and then replayed forward - which is how a
 // test fakes an older version - meets its own tables.
@@ -364,15 +392,20 @@ const ANALYTICS_DATE_INDEX_SQL = `
 
 const LATEST_SCHEMA_SQL =
   substituteOnce(
-    substituteOnce(BASELINE_V8_SCHEMA_SQL, BASELINE_REACTIONS_TABLE_SQL, V12_REACTIONS_TABLE_SQL),
-    BASELINE_PROVIDER_SESSIONS_CHECK_SQL,
-    V17_PROVIDER_SESSIONS_CHECK_SQL,
+    substituteOnce(
+      substituteOnce(BASELINE_V8_SCHEMA_SQL, BASELINE_REACTIONS_TABLE_SQL, V12_REACTIONS_TABLE_SQL),
+      BASELINE_PROVIDER_SESSIONS_CHECK_SQL,
+      V17_PROVIDER_SESSIONS_CHECK_SQL,
+    ),
+    BASELINE_MEMORY_TABLE_SQL,
+    LATEST_MEMORY_TABLE_SQL,
   ) +
   ANALYTICS_SCHEMA_SQL +
   ANALYTICS_DATE_INDEX_SQL +
   CHANNEL_SCHEMA_SQL +
   CHANNEL_SETTINGS_SCHEMA_SQL +
-  MCP_SERVERS_SCHEMA_SQL;
+  MCP_SERVERS_SCHEMA_SQL +
+  MEMORY_FTS_SCHEMA_SQL;
 
 // Silence here would ship new installs a table the migrations never produce, so an edit to the baseline
 // that moves this declaration out from under the substitution has to be loud.
@@ -458,6 +491,13 @@ const MIGRATIONS: readonly OpenBotMigration[] = [
     version: 20,
     // Only creates a table, so no foreign-key pause and no vacuum.
     up: (db) => db.exec(MCP_SERVERS_SCHEMA_SQL),
+  },
+  {
+    version: 21,
+    up: (db) => {
+      db.exec(`ALTER TABLE projection_agent_memories ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`);
+      db.exec(MEMORY_FTS_SCHEMA_SQL);
+    },
   },
 ];
 

@@ -128,6 +128,7 @@ describe("OpenBotDatabase", () => {
       { version: 18 },
       { version: 19 },
       { version: 20 },
+      { version: 21 },
     ]);
     database.close();
   });
@@ -1067,6 +1068,7 @@ describe("OpenBotDatabase", () => {
     database.close();
 
     const analyticsRelease = new DatabaseSync(database.path);
+    stripMemorySearchSchema(analyticsRelease);
     for (const table of ["memories", "routines", "routine_triggers", "routine_runs"])
       analyticsRelease.exec(`DROP TABLE projection_channel_${table}`);
     for (const table of ["assignments", "tasks", "messages", "summaries", "reads", "contexts"])
@@ -1107,6 +1109,7 @@ describe("OpenBotDatabase", () => {
       { version: 18 },
       { version: 19 },
       { version: 20 },
+      { version: 21 },
     ]);
     expect(migrated.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     migrated.close();
@@ -1153,6 +1156,7 @@ describe("OpenBotDatabase", () => {
     // Recreate the unshipped channel branch's version 18 profile: channel migrations are marked through
     // 18, while its provider table still has the three-provider CHECK that migration 17 widens.
     const legacy = new DatabaseSync(database.path);
+    stripMemorySearchSchema(legacy);
     legacy.exec(`
       PRAGMA foreign_keys = OFF;
       CREATE TABLE projection_provider_sessions_v18 (
@@ -1174,7 +1178,7 @@ describe("OpenBotDatabase", () => {
       ALTER TABLE projection_provider_sessions_v18 RENAME TO projection_provider_sessions;
       CREATE INDEX provider_sessions_thread
         ON projection_provider_sessions(thread_id, provider, state);
-      DELETE FROM schema_migrations WHERE version IN (19, 20);
+      DELETE FROM schema_migrations WHERE version IN (19, 20, 21);
       PRAGMA foreign_keys = ON;
     `);
     legacy.close();
@@ -1202,7 +1206,7 @@ describe("OpenBotDatabase", () => {
         .get(),
     ).toMatchObject({ sql: expect.stringContaining("'opencode'") });
     expect(migrated.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-      version: 20,
+      version: 21,
     });
     migrated.close();
   });
@@ -1218,9 +1222,10 @@ describe("OpenBotDatabase", () => {
 
     // A version 19 database: the table migration 20 creates is not there, and neither is its row.
     const legacy = new DatabaseSync(database.path);
+    stripMemorySearchSchema(legacy);
     legacy.exec(`
       DROP TABLE projection_mcp_servers;
-      DELETE FROM schema_migrations WHERE version = 20;
+      DELETE FROM schema_migrations WHERE version IN (20, 21);
     `);
     legacy.close();
 
@@ -1245,7 +1250,7 @@ describe("OpenBotDatabase", () => {
       { name: "Filesystem" },
     ]);
     expect(reopened.connection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({
-      version: 20,
+      version: 21,
     });
     reopened.close();
   });
@@ -1302,6 +1307,7 @@ describe("OpenBotDatabase", () => {
       { version: 18 },
       { version: 19 },
       { version: 20 },
+      { version: 21 },
     ]);
     migrated.close();
   });
@@ -1380,6 +1386,7 @@ describe("OpenBotDatabase", () => {
       { version: 18 },
       { version: 19 },
       { version: 20 },
+      { version: 21 },
     ]);
     retried.close();
   });
@@ -1917,6 +1924,7 @@ describe("OpenBotDatabase", () => {
 
       // A v16 database: the shipped three-provider constraint, and the migration ledger stamped one short.
       const legacy = new DatabaseSync(database.path);
+      stripMemorySearchSchema(legacy);
       legacy.exec(`
       DELETE FROM schema_migrations WHERE version >= 17;
       PRAGMA foreign_keys = OFF;
@@ -2326,8 +2334,21 @@ function conversationSnapshot(agent: AgentSummary, text: string): ConversationSn
   };
 }
 
+// Rewind a latest-schema fixture to pre-21: drop the FTS objects and the tags column this
+// version added. Tests that fake an older release call this before deleting the migration row.
+function stripMemorySearchSchema(database: DatabaseSync): void {
+  database.exec(`
+    DROP TRIGGER IF EXISTS projection_agent_memories_ai;
+    DROP TRIGGER IF EXISTS projection_agent_memories_ad;
+    DROP TRIGGER IF EXISTS projection_agent_memories_au;
+    DROP TABLE IF EXISTS projection_agent_memories_fts;
+    ALTER TABLE projection_agent_memories DROP COLUMN tags;
+  `);
+}
+
 // These tests construct released schemas by stripping newer additions from a fresh fixture.
 function removeSchemaAfterVersion14(db: DatabaseSync): void {
+  stripMemorySearchSchema(db);
   // Channel migrations 18 and 19 stand on the provider migration 17, so a fixture below 17 must
   // drop all three. Every version from 15 up goes: a history that keeps a later version and drops an earlier one has a gap, which the
   // schema check rejects before any upgrade runs.

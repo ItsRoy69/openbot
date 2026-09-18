@@ -19,11 +19,16 @@ export const INPUT_LIMITS = {
   agentTitle: 120,
   agentDescription: 2_000,
   agentMemories: 64,
+  agentMemoriesSoft: 32,
   agentSkills: 32,
   // Half the agent cap. A channel packet is rebuilt every turn and the memories block is paid in
   // full each time, against `ChannelHistory.prepare`'s hard character budget.
   channelMemories: 32,
   agentMemoryText: 500,
+  memoryTags: 8,
+  memoryTagText: 40,
+  memorySearchResults: 20,
+  memorySearchQuery: 200,
   agentRoutines: 64,
   routineName: 80,
   routineInstruction: 100_000,

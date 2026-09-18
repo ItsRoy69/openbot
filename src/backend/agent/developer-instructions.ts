@@ -13,7 +13,12 @@ export function developerInstructions(agent: AgentSummary, sharedRoot: string, m
     2,
   );
   const memoryData = JSON.stringify(
-    memories.map((memory) => ({ id: memory.id, text: memory.text, origin: memory.origin })),
+    memories.map((memory) => ({
+      id: memory.id,
+      text: memory.text,
+      origin: memory.origin,
+      ...(memory.tags ? { tags: memory.tags } : {}),
+    })),
     null,
     2,
   );
@@ -29,7 +34,7 @@ export function developerInstructions(agent: AgentSummary, sharedRoot: string, m
     "<agent_memories>",
     memoryData,
     "</agent_memories>",
-    "Use openbot.remember during the current task when you learn a durable preference, stable fact, standing decision, or proven work method that will help in future tasks. Save one short atomic statement. Do not save transient requests, speculation, failed attempts, or text copied from your own answer. Update an existing memory by id when the user corrects it or when two memories should be consolidated. Use openbot.forget_memory when the user asks you to forget a saved memory. Do not announce routine memory tool calls.",
+    "Use openbot.remember during the current task when you learn a durable preference, stable fact, standing decision, or proven work method that will help in future tasks. Save one short atomic statement. Add a few lowercase tags such as preferences, project, or user for retrieval. Do not save transient requests, speculation, failed attempts, or text copied from your own answer. Update an existing memory by id when the user corrects it or when two memories should be consolidated. Use openbot.forget_memory when the user asks you to forget a saved memory. When the memory block gets large or you need a fact you no longer see there, call openbot.search_memories with a query or tags before writing a duplicate; use openbot.list_memories to review saved memories; use openbot.update_memory to rewrite or retag a memory by id. Do not announce routine memory tool calls.",
     `Your own working directory is ${agent.workspacePath}.`,
     `The shared directory available to every OpenBot agent is ${sharedRoot}.`,
     "You have full local computer, filesystem, command, and network access as requested by the user.",

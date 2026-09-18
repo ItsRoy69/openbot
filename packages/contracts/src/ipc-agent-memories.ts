@@ -15,6 +15,7 @@ export interface MemoryEntry {
   sourceTurnId: string | null;
   createdAt: string;
   updatedAt: string;
+  tags?: string[];
 }
 
 export interface AgentMemory extends MemoryEntry {
@@ -36,7 +37,16 @@ export function isMemoryEntry(value: unknown): value is MemoryEntry {
         value.sourceTurnId.length > 0 &&
         value.sourceTurnId.length <= INPUT_LIMITS.identifier)) &&
     isString(value.createdAt) &&
-    isString(value.updatedAt)
+    isString(value.updatedAt) &&
+    (value.tags === undefined || isMemoryTags(value.tags))
+  );
+}
+
+function isMemoryTags(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= INPUT_LIMITS.memoryTags &&
+    value.every((tag) => isString(tag) && tag.trim().length > 0 && tag.length <= INPUT_LIMITS.memoryTagText)
   );
 }
 

@@ -635,6 +635,26 @@ describe("memory event validation", () => {
     expect(isAgentMemory({ ...memory, text: "" })).toBe(false);
     expect(isAgentMemory({ ...memory, origin: "imported" })).toBe(false);
   });
+
+  it("accepts tags when present and validates their shape", () => {
+    const memory = {
+      id: "memory-1",
+      agentId: "chief",
+      text: "Uses metric units.",
+      origin: "manual",
+      sourceTurnId: null,
+      createdAt: "2026-08-25T12:00:00.000Z",
+      updatedAt: "2026-08-25T12:00:00.000Z",
+    };
+    expect(isAgentMemory({ ...memory, tags: ["formatting", "metrics"] })).toBe(true);
+    expect(isAgentMemory({ ...memory, tags: [] })).toBe(true);
+    expect(isAgentMemory({ ...memory, tags: "" })).toBe(false);
+    expect(isAgentMemory({ ...memory, tags: ["", "ok"] })).toBe(false);
+    expect(isAgentMemory({ ...memory, tags: ["x".repeat(INPUT_LIMITS.memoryTagText + 1)] })).toBe(false);
+    expect(isAgentMemory({ ...memory, tags: Array.from({ length: INPUT_LIMITS.memoryTags + 1 }, () => "tag") })).toBe(
+      false,
+    );
+  });
 });
 
 describe("channel decoding", () => {

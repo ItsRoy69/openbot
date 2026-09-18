@@ -1,6 +1,6 @@
 import { INPUT_LIMITS } from "@openbot/contracts/input-limits";
 import type { AgentMemory } from "@openbot/contracts/ipc";
-import { MemoryStore, type MemoryTables } from "./memory-store";
+import { type MemorySearchOptions, MemoryStore, type MemoryTables } from "./memory-store";
 import type { OpenBotDatabase } from "./openbot-database";
 
 export interface SaveAutomaticMemoryInput {
@@ -9,6 +9,7 @@ export interface SaveAutomaticMemoryInput {
   text: string;
   sourceTurnId: string;
   expectedUpdatedAt?: string | null;
+  tags?: string[];
 }
 
 const AGENT_MEMORY_TABLES: MemoryTables = {
@@ -17,6 +18,8 @@ const AGENT_MEMORY_TABLES: MemoryTables = {
   aggregateType: "agent-memory",
   limit: INPUT_LIMITS.agentMemories,
   limitMessage: `An agent can have up to ${INPUT_LIMITS.agentMemories} memories.`,
+  softLimit: INPUT_LIMITS.agentMemoriesSoft,
+  hasTags: true,
 };
 
 /**
@@ -37,16 +40,20 @@ export class AgentMemoryStore extends MemoryStore {
     return memory && { ...memory, agentId };
   }
 
-  override createManual(agentId: string, text: string): AgentMemory {
-    return { ...super.createManual(agentId, text), agentId };
+  override createManual(agentId: string, text: string, tags?: string[]): AgentMemory {
+    return { ...super.createManual(agentId, text, tags), agentId };
   }
 
   override duplicate(sourceAgentId: string, targetAgentId: string): AgentMemory[] {
     return super.duplicate(sourceAgentId, targetAgentId).map((memory) => ({ ...memory, agentId: targetAgentId }));
   }
 
-  override updateManual(agentId: string, memoryId: string, text: string): AgentMemory {
-    return { ...super.updateManual(agentId, memoryId, text), agentId };
+  override updateManual(agentId: string, memoryId: string, text: string, tags?: string[]): AgentMemory {
+    return { ...super.updateManual(agentId, memoryId, text, tags), agentId };
+  }
+
+  override search(agentId: string, options: MemorySearchOptions = {}): AgentMemory[] {
+    return super.search(agentId, options).map((memory) => ({ ...memory, agentId }));
   }
 
   saveAutomatic(input: SaveAutomaticMemoryInput): AgentMemory | null {

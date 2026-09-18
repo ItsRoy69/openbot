@@ -9,6 +9,8 @@ const CHANNEL_MEMORY_TABLES: MemoryTables = {
   aggregateType: "channel-memory",
   limit: INPUT_LIMITS.channelMemories,
   limitMessage: `A channel can have up to ${INPUT_LIMITS.channelMemories} memories.`,
+  softLimit: INPUT_LIMITS.channelMemories,
+  hasTags: false,
 };
 
 /** The channel twin of `AgentMemoryStore`: the same `MemoryStore`, with a channel for an owner. */

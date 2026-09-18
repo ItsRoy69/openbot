@@ -24,5 +24,9 @@ table, IPC channel or product string, or when a term in the code disagrees with 
 - **thread**: durable `projection_threads` record. **conversation**: its read projection, with no
   separate table. **provider session**: private CLI resume state (`projection_provider_sessions`).
   **team session**: authenticated remote connection. **turn**: one exchange in a thread.
+- **memory**: an agent's durable stored fact (`projection_agent_memories`, `MemoryEntry`,
+  `AgentMemories`). **channel memory** (`projection_channel_memories`) is the shared-chat echo of
+  the same row shape, without tags or search. `remember` is the tool; **personal memory** is the
+  doc name ([`docs/personal-memory.md`](personal-memory.md)), never a wire or type name.
 - **routine**: a scheduled instruction for one agent (`projection_agent_routines`), not Claude
   Code `/schedule`.
